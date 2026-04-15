@@ -28,13 +28,16 @@ ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 COPY . .
+RUN npm run build
+
+RUN npm prune --omit=dev
 
 # Datakatalog på persistent volum (Railway: mount /data)
 ENV DATA_DIR=/data
 
 EXPOSE 3000
 
-CMD ["node", "--import", "tsx/esm", "src/bot.ts"]
+CMD ["node", "dist/bot.js"]
