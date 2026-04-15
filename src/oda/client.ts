@@ -12,10 +12,7 @@ let _context: BrowserContext | null = null;
 export async function getBrowserContext(headless = true): Promise<BrowserContext> {
   if (_context) return _context;
 
-  _browser = await chromium.launch({
-    headless,
-    executablePath: process.env['PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH'] ?? undefined,
-  });
+  _browser = await chromium.launch({ headless });
 
   const storageState = existsSync(SESSION_PATH)
     ? SESSION_PATH
