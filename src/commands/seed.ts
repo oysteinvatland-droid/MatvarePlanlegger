@@ -5,9 +5,14 @@ import { getDb } from '../db/client.js';
 
 const RECIPES_URL = 'https://oda.com/no/recipes/';
 
+const GLUTEN_KEYWORDS = [
+  'hvetemel', 'panert', 'panering', 'brødsmuler', 'tempura', 'soyasaus', 'worcestershire',
+];
+
 export interface SeedOptions {
   wanted?: number;
   scanCount?: number;
+  maxPrice?: number;
   onProgress?: (msg: string) => void;
 }
 
@@ -24,6 +29,7 @@ export interface SeedResult {
 export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise<SeedResult> {
   const wanted = opts.wanted ?? 10;
   const scanCount = opts.scanCount ?? 30;
+  const maxPrice = opts.maxPrice ?? null;
   const log = opts.onProgress ?? (() => {});
 
   const browser = await chromium.launch({ headless: true });
@@ -47,18 +53,39 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
     if (candidates.length === 0) return { added: 0, skipped: 0 };
 
     // Scan alle kandidater og samle tilgjengelige med pris
-    const available: { name: string; url: string; price: number | null }[] = [];
+    const available: { name: string; url: string; price: number | null; tags: string[] }[] = [];
     let skipped = 0;
 
     for (const candidate of candidates) {
       const info = await getRecipeInfo(recipePage, candidate.url);
+
       if (info.unavailable.length > 0) {
         skipped++;
         log(`Utsolgt: ${candidate.name}`);
-      } else {
-        available.push({ name: candidate.name, url: candidate.url, price: info.price });
-        log(`Tilgjengelig: ${candidate.name}${info.price !== null ? ` (${info.price} kr)` : ''}`);
+        continue;
       }
+
+      if (info.glutenIngredients.length > 0) {
+        skipped++;
+        log(`Gluten: ${candidate.name} (${info.glutenIngredients.join(', ')})`);
+        continue;
+      }
+
+      if (maxPrice !== null && info.price !== null && info.price > maxPrice) {
+        skipped++;
+        log(`For dyr: ${candidate.name} (${info.price} kr > ${maxPrice} kr)`);
+        continue;
+      }
+
+      // Filtrer på "Middag"-tag, men bare hvis vi faktisk fant tags
+      if (info.tags.length > 0 && !info.tags.some(t => /middag/i.test(t))) {
+        skipped++;
+        log(`Ikke middag: ${candidate.name} (tags: ${info.tags.join(', ')})`);
+        continue;
+      }
+
+      available.push({ name: candidate.name, url: candidate.url, price: info.price, tags: info.tags });
+      log(`Tilgjengelig: ${candidate.name}${info.price !== null ? ` (${info.price} kr)` : ''}`);
     }
 
     // Sorter billigst-først (null-pris bakerst)
@@ -71,12 +98,12 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
 
     const db = getDb();
     const insert = db.prepare(
-      `INSERT OR IGNORE INTO recipes (name, oda_url, tags, price) VALUES (?, ?, '[]', ?)`
+      `INSERT OR IGNORE INTO recipes (name, oda_url, tags, price) VALUES (?, ?, ?, ?)`
     );
 
     let added = 0;
     for (const recipe of available.slice(0, wanted)) {
-      const result = insert.run(recipe.name, recipe.url, recipe.price);
+      const result = insert.run(recipe.name, recipe.url, JSON.stringify(recipe.tags), recipe.price);
       if (result.changes > 0) {
         added++;
         log(`Lagt til: ${recipe.name}${recipe.price !== null ? ` (${recipe.price} kr)` : ''}`);
@@ -91,34 +118,47 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
 
 interface RecipeInfo {
   unavailable: string[];
+  glutenIngredients: string[];
+  tags: string[];
   price: number | null;
 }
 
 async function getRecipeInfo(page: Page, url: string): Promise<RecipeInfo> {
   await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
 
-  return page.evaluate((): RecipeInfo => {
+  return page.evaluate((args: { glutenKeywords: string[] }): RecipeInfo => {
     const unavailable: string[] = [];
+    const glutenIngredients: string[] = [];
 
     // Strategi 1: Tabellrader med ingredient-quantity-klasse
     const rows = Array.from(document.querySelectorAll('tr')).filter(
       tr => tr.querySelector('[class*="ingredient-quantity"]')
     );
     for (const tr of rows) {
-      if (/utsolgt|ikke tilgjengelig|midlertidig utilgjengelig/i.test(tr.textContent ?? '')) {
+      const text = tr.textContent ?? '';
+      if (/utsolgt|ikke tilgjengelig|midlertidig utilgjengelig/i.test(text)) {
         const cells = tr.querySelectorAll('td');
-        unavailable.push(cells[1]?.textContent?.trim() ?? tr.textContent?.trim().slice(0, 50) ?? 'ukjent');
+        unavailable.push(cells[1]?.textContent?.trim() ?? text.trim().slice(0, 50) ?? 'ukjent');
+      }
+      // Glutensjekk mot ingredienstekst
+      const lower = text.toLowerCase();
+      for (const kw of args.glutenKeywords) {
+        if (lower.includes(kw)) {
+          const cells = tr.querySelectorAll('td');
+          const name = cells[1]?.textContent?.trim() ?? text.trim().slice(0, 50);
+          if (name) glutenIngredients.push(name);
+          break;
+        }
       }
     }
 
     if (unavailable.length === 0) {
       // Strategi 2: Start fra produktlenker og sjekk om "utsolgt" finnes nær dem.
-      // Kategorilenker (/products/snarveier/) filtreres ut – produktlenker har lengre URL-sti.
       const productLinks = Array.from(
         document.querySelectorAll('a[href*="/products/"]')
       ).filter(a => {
         const parts = (a.getAttribute('href') ?? '').replace(/\/$/, '').split('/').filter(Boolean);
-        return parts.length >= 3; // /products/slug/id/ – ikke bare /products/kategori/
+        return parts.length >= 3;
       });
 
       for (const link of productLinks) {
@@ -134,24 +174,44 @@ async function getRecipeInfo(page: Page, url: string): Promise<RecipeInfo> {
       }
     }
 
+    // Hent kategori-tags: Oda.no viser kategorier som lenker til /no/recipes/<kategori>/
+    // Kategorilenker er korte stier uten tall i siste ledd (skiller fra oppskriftslenker som starter med siffer)
+    const tags: string[] = [];
+    const recipeLinks = Array.from(document.querySelectorAll('a[href*="/recipes/"]'));
+    for (const a of recipeLinks) {
+      const href = a.getAttribute('href') ?? '';
+      const parts = href.replace(/\/$/, '').split('/').filter(Boolean);
+      const lastPart = parts[parts.length - 1] ?? '';
+      // Kategorilenker: /no/recipes/middag/ → siste ledd uten siffer i starten
+      // Oppskriftslenker: /no/recipes/5289-laks/ → starter med siffer
+      if (parts.length === 3 && !/^\d/.test(lastPart)) {
+        const label = a.textContent?.trim();
+        if (label && label.length > 0) tags.push(label);
+      }
+    }
+
     // Hent totalpris
     const priceText = document.querySelector('[data-testid="products-total"] .k-text-style--headline-m')?.textContent ?? null;
     const price = priceText ? parseFloat(priceText.replace(/[^\d,]/g, '').replace(',', '.')) : null;
 
     return {
       unavailable: [...new Set(unavailable)].filter(s => s.length > 0),
+      glutenIngredients: [...new Set(glutenIngredients)].filter(s => s.length > 0),
+      tags: [...new Set(tags)],
       price: price !== null && !isNaN(price) ? price : null,
     };
-  });
+  }, { glutenKeywords: GLUTEN_KEYWORDS });
 }
 
 const seedCommand = new Command('seed')
   .description('Hent middager fra oda.no og lagre i databasen (hopper over utsolgte)')
   .option('-n, --antall <n>', 'Antall oppskrifter å lagre', '10')
   .option('--skann <n>', 'Antall oppskrifter å skanne fra listesiden', '30')
-  .action(async (opts: { antall: string; skann: string }) => {
+  .option('--max-pris <kr>', 'Hopp over oppskrifter dyrere enn dette (kr)')
+  .action(async (opts: { antall: string; skann: string; maxPris?: string }) => {
     const wanted = parseInt(opts.antall, 10);
     const scanCount = parseInt(opts.skann, 10);
+    const maxPrice = opts.maxPris ? parseFloat(opts.maxPris) : null;
     console.log('\n  ' + chalk.dim(`Henter opp til ${scanCount} oppskrifter fra oda.no og sjekker tilgjengelighet...`));
 
     const browser = await chromium.launch({ headless: true });
@@ -186,7 +246,7 @@ const seedCommand = new Command('seed')
       db.exec('DELETE FROM recipes');
 
       const insert = db.prepare(
-        `INSERT INTO recipes (name, oda_url, tags, price) VALUES (?, ?, '[]', ?)`
+        `INSERT INTO recipes (name, oda_url, tags, price) VALUES (?, ?, ?, ?)`
       );
 
       let added = 0;
@@ -201,15 +261,35 @@ const seedCommand = new Command('seed')
         if (info.unavailable.length > 0) {
           process.stdout.write('\r' + chalk.yellow(`  ⚠ Utsolgt: ${candidate.name} (${info.unavailable.join(', ')})`) + ' '.repeat(10) + '\n');
           skipped++;
-        } else {
-          const priceLabel = info.price !== null ? ` – ${info.price} kr` : '';
-          process.stdout.write('\r' + chalk.green(`  ✓ ${candidate.name}${priceLabel}`) + ' '.repeat(10) + '\n');
-          insert.run(candidate.name, candidate.url, info.price);
-          added++;
+          continue;
         }
+
+        if (info.glutenIngredients.length > 0) {
+          process.stdout.write('\r' + chalk.yellow(`  ⚠ Gluten: ${candidate.name} (${info.glutenIngredients.join(', ')})`) + ' '.repeat(10) + '\n');
+          skipped++;
+          continue;
+        }
+
+        if (maxPrice !== null && info.price !== null && info.price > maxPrice) {
+          process.stdout.write('\r' + chalk.yellow(`  ⚠ For dyr: ${candidate.name} (${info.price} kr)`) + ' '.repeat(10) + '\n');
+          skipped++;
+          continue;
+        }
+
+        if (info.tags.length > 0 && !info.tags.some(t => /middag/i.test(t))) {
+          process.stdout.write('\r' + chalk.yellow(`  ⚠ Ikke middag: ${candidate.name} (${info.tags.join(', ')})`) + ' '.repeat(10) + '\n');
+          skipped++;
+          continue;
+        }
+
+        const priceLabel = info.price !== null ? ` – ${info.price} kr` : '';
+        const tagsLabel = info.tags.length > 0 ? ` [${info.tags.join(', ')}]` : '';
+        process.stdout.write('\r' + chalk.green(`  ✓ ${candidate.name}${priceLabel}${tagsLabel}`) + ' '.repeat(10) + '\n');
+        insert.run(candidate.name, candidate.url, JSON.stringify(info.tags), info.price);
+        added++;
       }
 
-      console.log(chalk.dim(`\n  ${added} oppskrifter lagret${skipped ? `, ${skipped} hoppet over (utsolgte ingredienser)` : ''}\n`));
+      console.log(chalk.dim(`\n  ${added} oppskrifter lagret${skipped ? `, ${skipped} hoppet over` : ''}\n`));
     } finally {
       await browser.close();
     }

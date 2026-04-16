@@ -151,11 +151,12 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'refresh_recipes',
-    description: 'Hent nye oppskrifter fra oda.no og legg dem til i databasen. Sletter IKKE eksisterende oppskrifter eller historikk. Bruk når brukeren ber om oppdatering eller det er lite å velge mellom.',
+    description: 'Hent nye oppskrifter fra oda.no og legg dem til i databasen. Sletter IKKE eksisterende oppskrifter eller historikk. Hopper over oppskrifter med gluteningredienser og ikke-middagsoppskrifter. Bruk når brukeren ber om oppdatering eller det er lite å velge mellom.',
     input_schema: {
       type: 'object' as const,
       properties: {
         antall: { type: 'number', description: 'Maks antall nye oppskrifter å hente (standard: 10)' },
+        max_pris: { type: 'number', description: 'Hopp over oppskrifter dyrere enn dette beløpet i kr (valgfri)' },
       },
       required: [],
     },
@@ -290,7 +291,8 @@ export async function runTool(
 
     case 'refresh_recipes': {
       const antall = typeof input['antall'] === 'number' ? input['antall'] : 10;
-      const result = await seedRecipesNonDestructive({ wanted: antall, scanCount: 30 });
+      const maxPrice = typeof input['max_pris'] === 'number' ? input['max_pris'] : undefined;
+      const result = await seedRecipesNonDestructive({ wanted: antall, scanCount: 30, maxPrice });
       return result;
     }
 
