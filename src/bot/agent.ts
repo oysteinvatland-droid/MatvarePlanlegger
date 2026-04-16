@@ -22,7 +22,10 @@ Les preferences.md og hent config (get_config) før du tar noen handling. Prefer
 - Bekreft alltid at endringen er lagret i svaret ditt
 
 ## Når brukeren ber om å se innstillinger
-Kall read_preferences og get_config, og presenter begge på en oversiktlig måte.
+Kall read_preferences, get_config og get_schedule, og presenter alt på en oversiktlig måte.
+
+## Når brukeren vil endre skjema
+Bruk set_schedule med job="fredag" eller "tirsdag" og time i HH:MM-format.
 
 Svar alltid på norsk. Vær kortfattet og konkret.`;
 

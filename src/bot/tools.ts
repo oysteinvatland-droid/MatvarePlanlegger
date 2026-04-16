@@ -6,6 +6,7 @@ import { getAllRecipes } from '../db/recipes.js';
 import { getHistoryWithNames } from '../db/history.js';
 import { getWeeklyPlan, setDayPlan, getMondayOfWeek, clearWeekPlan } from '../planner/week.js';
 import { getConfig, setConfig } from '../db/preferences.js';
+import { getScheduleTimes, setScheduleTime } from './scheduler.js';
 import { suggestMeals } from '../planner/engine.js';
 import { getBrowserContext, closeBrowser } from '../oda/client.js';
 import { ensureLoggedIn, saveSession } from '../oda/auth.js';
@@ -150,6 +151,27 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'get_schedule',
+    description: 'Vis når boten er satt opp til å kjøre automatisk (fredag-planlegging og tirsdag-oppdatering).',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'set_schedule',
+    description: 'Endre tidspunkt for automatisk kjøring. job = "fredag" (planlegging+bestilling) eller "tirsdag" (oppdater oppskrifter). time = klokkeslett i HH:MM-format.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        job: { type: 'string', enum: ['fredag', 'tirsdag'], description: '"fredag" eller "tirsdag"' },
+        time: { type: 'string', description: 'Klokkeslett i HH:MM-format, f.eks. "09:00"' },
+      },
+      required: ['job', 'time'],
+    },
+  },
+  {
     name: 'refresh_recipes',
     description: 'Hent nye oppskrifter fra oda.no og legg dem til i databasen. Sletter IKKE eksisterende oppskrifter eller historikk. Hopper over oppskrifter med gluteningredienser og ikke-middagsoppskrifter. Bruk når brukeren ber om oppdatering eller det er lite å velge mellom.',
     input_schema: {
@@ -287,6 +309,28 @@ export async function runTool(
       }
 
       return { results };
+    }
+
+    case 'get_schedule': {
+      const times = getScheduleTimes();
+      return {
+        fredag: `Planlegging og bestilling kjører kl. ${times.friday} (norsk tid)`,
+        tirsdag: `Oppdatering av oppskrifter kjører kl. ${times.tuesday} (norsk tid)`,
+      };
+    }
+
+    case 'set_schedule': {
+      const job = String(input['job'] ?? '') as 'fredag' | 'tirsdag';
+      const time = String(input['time'] ?? '');
+      if (!/^\d{2}:\d{2}$/.test(time)) {
+        return { ok: false, error: 'Ugyldig tidsformat. Bruk HH:MM, f.eks. "09:00".' };
+      }
+      const [h, m] = time.split(':').map(Number);
+      if (h < 0 || h > 23 || m < 0 || m > 59) {
+        return { ok: false, error: 'Ugyldig klokkeslett.' };
+      }
+      setScheduleTime(job, time);
+      return { ok: true, job, time, message: `${job}-kjøring er nå satt til kl. ${time} (norsk tid).` };
     }
 
     case 'refresh_recipes': {
