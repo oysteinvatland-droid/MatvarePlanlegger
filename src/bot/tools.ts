@@ -384,7 +384,7 @@ export async function runTool(
     case 'refresh_recipes': {
       const antall = typeof input['antall'] === 'number' ? input['antall'] : 10;
       const maxPrice = typeof input['max_pris'] === 'number' ? input['max_pris'] : undefined;
-      const result = await seedRecipesNonDestructive({ wanted: antall, scanCount: 30, maxPrice });
+      const result = await seedRecipesNonDestructive({ wanted: antall, maxPrice });
       return result;
     }
 

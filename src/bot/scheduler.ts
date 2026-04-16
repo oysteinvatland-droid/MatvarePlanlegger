@@ -67,7 +67,7 @@ export function restartScheduler(): void {
   tuesdayTask = cron.schedule(timeToCron(times.tuesday, 2), async () => {
     console.log('Tirsdag-seed starter...');
     try {
-      const { added, skipped } = await seedRecipesNonDestructive({ wanted: 10, scanCount: 30 });
+      const { added, skipped } = await seedRecipesNonDestructive({ wanted: 10 });
       if (added > 0) {
         await sendToDiscord(`Oppskriftsliste oppdatert: ${added} nye oppskrifter lagt til (${skipped} hoppet over).`);
       }
