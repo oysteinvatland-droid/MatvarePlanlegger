@@ -1,6 +1,21 @@
 import { getDb } from './client.js';
 import type { Preference, Config } from './types.js';
 
+const DEFAULT_GLUTEN_KEYWORDS = [
+  'hvetemel', 'panert', 'panering', 'brødsmuler', 'tempura', 'soyasaus', 'worcestershire',
+];
+
+export function getGlutenKeywords(): string[] {
+  const db = getDb();
+  const row = db.prepare("SELECT value FROM config WHERE key = 'gluten_keywords'").get() as { value: string } | undefined;
+  if (!row) return DEFAULT_GLUTEN_KEYWORDS;
+  try {
+    return JSON.parse(row.value) as string[];
+  } catch {
+    return DEFAULT_GLUTEN_KEYWORDS;
+  }
+}
+
 interface PreferenceRow {
   recipe_id: number;
   rating: number | null;

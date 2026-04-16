@@ -23,6 +23,8 @@ Les preferences.md og hent config (get_config) før du tar noen handling. Prefer
 
 ## Når brukeren ber om å se innstillinger
 Kall read_preferences, get_config og get_schedule, og presenter alt på en oversiktlig måte.
+get_config returnerer også glutenKeywords – listen over ingredienser som gjør at oppskrifter hoppes over ved import.
+Brukeren kan endre listen ved å si f.eks. «legg til "soyamel" i glutenlisten» → bruk set_config med key='gluten_keywords' og value=JSON-array.
 
 ## Når brukeren vil endre skjema
 Bruk set_schedule med job="fredag" eller "tirsdag" og time i HH:MM-format.

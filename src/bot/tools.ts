@@ -5,7 +5,7 @@ import { seedRecipesNonDestructive } from '../commands/seed.js';
 import { getAllRecipes } from '../db/recipes.js';
 import { getHistoryWithNames } from '../db/history.js';
 import { getWeeklyPlan, setDayPlan, getMondayOfWeek, clearWeekPlan } from '../planner/week.js';
-import { getConfig, setConfig } from '../db/preferences.js';
+import { getConfig, setConfig, getGlutenKeywords } from '../db/preferences.js';
 import { getScheduleTimes, setScheduleTime } from './scheduler.js';
 import { suggestMeals } from '../planner/engine.js';
 import { getBrowserContext, closeBrowser } from '../oda/client.js';
@@ -111,7 +111,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'get_config',
-    description: 'Hent konfigurasjon: husholdningsstørrelse, antall planleggingsdager, kostholdspreferanser.',
+    description: 'Hent konfigurasjon: husholdningsstørrelse, antall planleggingsdager, kostholdspreferanser, og glutennøkkelordliste (glutenKeywords).',
     input_schema: {
       type: 'object' as const,
       properties: {},
@@ -241,7 +241,7 @@ export async function runTool(
     }
 
     case 'get_config': {
-      return getConfig();
+      return { ...getConfig(), glutenKeywords: getGlutenKeywords() };
     }
 
     case 'set_config': {

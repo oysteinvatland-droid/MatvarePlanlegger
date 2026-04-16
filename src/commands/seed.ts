@@ -2,12 +2,9 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { chromium, type Page } from 'playwright';
 import { getDb } from '../db/client.js';
+import { getGlutenKeywords } from '../db/preferences.js';
 
 const RECIPES_URL = 'https://oda.com/no/recipes/';
-
-const GLUTEN_KEYWORDS = [
-  'hvetemel', 'panert', 'panering', 'brødsmuler', 'tempura', 'soyasaus', 'worcestershire',
-];
 
 export interface SeedOptions {
   wanted?: number;
@@ -32,6 +29,7 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
   const maxPrice = opts.maxPrice ?? null;
   const log = opts.onProgress ?? (() => {});
 
+  const glutenKeywords = getGlutenKeywords();
   const browser = await chromium.launch({ headless: true });
   const listPage = await browser.newPage();
   const recipePage = await browser.newPage();
@@ -57,7 +55,7 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
     let skipped = 0;
 
     for (const candidate of candidates) {
-      const info = await getRecipeInfo(recipePage, candidate.url);
+      const info = await getRecipeInfo(recipePage, candidate.url, glutenKeywords);
 
       if (info.unavailable.length > 0) {
         skipped++;
@@ -123,7 +121,7 @@ interface RecipeInfo {
   price: number | null;
 }
 
-async function getRecipeInfo(page: Page, url: string): Promise<RecipeInfo> {
+async function getRecipeInfo(page: Page, url: string, glutenKeywords: string[]): Promise<RecipeInfo> {
   await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
 
   return page.evaluate((args: { glutenKeywords: string[] }): RecipeInfo => {
@@ -200,7 +198,7 @@ async function getRecipeInfo(page: Page, url: string): Promise<RecipeInfo> {
       tags: [...new Set(tags)],
       price: price !== null && !isNaN(price) ? price : null,
     };
-  }, { glutenKeywords: GLUTEN_KEYWORDS });
+  }, { glutenKeywords });
 }
 
 const seedCommand = new Command('seed')
@@ -212,6 +210,7 @@ const seedCommand = new Command('seed')
     const wanted = parseInt(opts.antall, 10);
     const scanCount = parseInt(opts.skann, 10);
     const maxPrice = opts.maxPris ? parseFloat(opts.maxPris) : null;
+    const glutenKeywords = getGlutenKeywords();
     console.log('\n  ' + chalk.dim(`Henter opp til ${scanCount} oppskrifter fra oda.no og sjekker tilgjengelighet...`));
 
     const browser = await chromium.launch({ headless: true });
@@ -256,7 +255,7 @@ const seedCommand = new Command('seed')
         if (added >= wanted) break;
 
         process.stdout.write(chalk.dim(`  Sjekker: ${candidate.name}...`));
-        const info = await getRecipeInfo(recipePage, candidate.url);
+        const info = await getRecipeInfo(recipePage, candidate.url, glutenKeywords);
 
         if (info.unavailable.length > 0) {
           process.stdout.write('\r' + chalk.yellow(`  ⚠ Utsolgt: ${candidate.name} (${info.unavailable.join(', ')})`) + ' '.repeat(10) + '\n');
