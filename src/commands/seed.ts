@@ -59,14 +59,8 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
       const newCards = allCards.filter(c => !seenUrls.has(c.url));
 
       if (newCards.length === 0) {
-        // Prøv å scrolle ned for å laste flere
-        const before = allCards.length;
-        await listPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-        await listPage.waitForTimeout(2500);
-        const after = await listPage.evaluate(() =>
-          document.querySelectorAll('[data-testid^="recipe-tile"]').length
-        );
-        if (after <= before) break; // ingen nye lastet
+        const loaded = await scrollForMore(listPage, allCards.length);
+        if (!loaded) break;
         continue;
       }
 
@@ -112,6 +106,33 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
   } finally {
     await browser.close();
   }
+}
+
+/**
+ * Scroller til siste oppskriftskort og venter på at nye lastes inn.
+ * Returnerer true hvis nye kort dukket opp, false hvis siden er tom.
+ */
+async function scrollForMore(page: Page, currentCount: number): Promise<boolean> {
+  // Scroll til siste synlige kort for å trigge lazy-loading
+  await page.evaluate((selector: string) => {
+    const cards = document.querySelectorAll(selector);
+    const last = cards[cards.length - 1];
+    if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    else window.scrollTo(0, document.body.scrollHeight);
+  }, '[data-testid^="recipe-tile"]');
+
+  // Vent på at nettverksaktivitet roer seg
+  try {
+    await page.waitForLoadState('networkidle', { timeout: 5000 });
+  } catch {
+    await page.waitForTimeout(3000);
+  }
+
+  const after = await page.evaluate((selector: string) =>
+    document.querySelectorAll(selector).length
+  , '[data-testid^="recipe-tile"]');
+
+  return after > currentCount;
 }
 
 interface RecipeInfo {
@@ -245,13 +266,8 @@ const seedCommand = new Command('seed')
         const newCards = allCards.filter(c => !seenUrls.has(c.url));
 
         if (newCards.length === 0) {
-          const before = allCards.length;
-          await listPage.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
-          await listPage.waitForTimeout(2500);
-          const after = await listPage.evaluate(() =>
-            document.querySelectorAll('[data-testid^="recipe-tile"]').length
-          );
-          if (after <= before) break;
+          const loaded = await scrollForMore(listPage, allCards.length);
+          if (!loaded) break;
           continue;
         }
 
