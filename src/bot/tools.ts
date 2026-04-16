@@ -5,7 +5,7 @@ import { seedRecipesNonDestructive } from '../commands/seed.js';
 import { getAllRecipes } from '../db/recipes.js';
 import { getHistoryWithNames } from '../db/history.js';
 import { getWeeklyPlan, setDayPlan, getMondayOfWeek, clearWeekPlan } from '../planner/week.js';
-import { getConfig, setConfig, getGlutenKeywords } from '../db/preferences.js';
+import { getConfig, setConfig, getGlutenKeywords, upsertPreference } from '../db/preferences.js';
 import { getScheduleTimes, setScheduleTime } from './scheduler.js';
 import { suggestMeals } from '../planner/engine.js';
 import { getBrowserContext, closeBrowser } from '../oda/client.js';
@@ -172,6 +172,30 @@ export const toolDefinitions: Anthropic.Tool[] = [
     },
   },
   {
+    name: 'delete_recipe',
+    description: 'Slett en oppskrift fra databasen permanent. Bruk når brukeren vil fjerne en oppskrift.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        recipe_id: { type: 'number', description: 'ID til oppskriften som skal slettes' },
+      },
+      required: ['recipe_id'],
+    },
+  },
+  {
+    name: 'set_recipe_preference',
+    description: 'Sett preferanse for en oppskrift: frequency (often/normal/seldom/never) og/eller liked (true/false). Bruk "never" for å aldri foreslå den igjen.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        recipe_id: { type: 'number', description: 'ID til oppskriften' },
+        frequency: { type: 'string', enum: ['often', 'normal', 'seldom', 'never'], description: 'Hvor ofte oppskriften skal foreslås' },
+        liked: { type: 'boolean', description: 'Om oppskriften er likt (false = aldri foreslå)' },
+      },
+      required: ['recipe_id'],
+    },
+  },
+  {
     name: 'refresh_recipes',
     description: 'Hent nye oppskrifter fra oda.no og legg dem til i databasen. Sletter IKKE eksisterende oppskrifter eller historikk. Hopper over oppskrifter med gluteningredienser og ikke-middagsoppskrifter. Bruk når brukeren ber om oppdatering eller det er lite å velge mellom.',
     input_schema: {
@@ -331,6 +355,30 @@ export async function runTool(
       }
       setScheduleTime(job, time);
       return { ok: true, job, time, message: `${job}-kjøring er nå satt til kl. ${time} (norsk tid).` };
+    }
+
+    case 'delete_recipe': {
+      const id = typeof input['recipe_id'] === 'number' ? input['recipe_id'] : null;
+      if (!id) return { ok: false, error: 'recipe_id mangler.' };
+      const db = getDb();
+      const recipe = db.prepare('SELECT name FROM recipes WHERE id = ?').get(id) as { name: string } | undefined;
+      if (!recipe) return { ok: false, error: `Fant ingen oppskrift med id ${id}.` };
+      db.prepare('DELETE FROM weekly_plans WHERE recipe_id = ?').run(id);
+      db.prepare('DELETE FROM meal_history WHERE recipe_id = ?').run(id);
+      db.prepare('DELETE FROM preferences WHERE recipe_id = ?').run(id);
+      db.prepare('DELETE FROM recipes WHERE id = ?').run(id);
+      return { ok: true, deleted: recipe.name };
+    }
+
+    case 'set_recipe_preference': {
+      const id = typeof input['recipe_id'] === 'number' ? input['recipe_id'] : null;
+      if (!id) return { ok: false, error: 'recipe_id mangler.' };
+      const updates: Record<string, unknown> = {};
+      if (input['frequency']) updates['frequency'] = input['frequency'];
+      if (typeof input['liked'] === 'boolean') updates['liked'] = input['liked'];
+      if (Object.keys(updates).length === 0) return { ok: false, error: 'Ingen endringer oppgitt.' };
+      upsertPreference(id, updates as Parameters<typeof upsertPreference>[1]);
+      return { ok: true, recipe_id: id, ...updates };
     }
 
     case 'refresh_recipes': {
