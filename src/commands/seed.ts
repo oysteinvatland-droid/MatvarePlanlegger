@@ -1,8 +1,9 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { chromium, type Page } from 'playwright';
+import type { Page } from 'playwright';
 import { getDb } from '../db/client.js';
 import { getGlutenKeywords } from '../db/preferences.js';
+import { getBrowserContext, closeBrowser } from '../oda/client.js';
 
 const RECIPES_BASE = 'https://oda.com/no/recipes/all/?filters=meal%3A65';
 const MAX_SCAN = 200;
@@ -21,6 +22,27 @@ export interface SeedResult {
   stopReason: 'done' | 'no-more-recipes' | 'max-scan-reached';
 }
 
+async function gotoWithRetry(
+  page: Page,
+  url: string,
+  log?: (msg: string) => void,
+  maxAttempts = 2,
+): Promise<void> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+      return;
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        log?.(`Retry ${attempt}/${maxAttempts - 1} for ${url}`);
+        await page.waitForTimeout(3000);
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 /**
  * Hent nye oppskrifter fra oda.no uten å slette eksisterende data.
  * Fortsetter å hente (med scroll) til wanted er lagt til eller ingen flere finnes.
@@ -36,9 +58,9 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
     `INSERT OR IGNORE INTO recipes (name, oda_url, tags, price) VALUES (?, ?, ?, ?)`
   );
 
-  const browser = await chromium.launch({ headless: true });
-  const listPage = await browser.newPage();
-  const recipePage = await browser.newPage();
+  const context = await getBrowserContext();
+  const listPage = await context.newPage();
+  const recipePage = await context.newPage();
 
   try {
     let added = 0;
@@ -52,7 +74,8 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
     while (added < wanted && totalScanned < MAX_SCAN) {
       const url = `${RECIPES_BASE}&page=${page}`;
       log(`Side ${page}… (${added}/${wanted} lagt til så langt)`);
-      await listPage.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+      await gotoWithRetry(listPage, url, log);
+      await listPage.waitForSelector('[data-testid^="recipe-tile"]', { timeout: 15000 }).catch(() => {});
 
       if (!cookieHandled) {
         const cookieBtn = listPage.getByRole('button', { name: /godkjenn alle/i });
@@ -82,6 +105,7 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
         }
         totalScanned++;
 
+        await recipePage.waitForTimeout(1000 + Math.random() * 1000);
         const info = await getRecipeInfo(recipePage, candidate.url, glutenKeywords);
 
         if (info.unavailable.length > 0) {
@@ -118,7 +142,9 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
 
     return { added, skipped, duplicates, totalScanned, stopReason };
   } finally {
-    await browser.close();
+    await listPage.close();
+    await recipePage.close();
+    await closeBrowser();
   }
 }
 
@@ -131,7 +157,8 @@ interface RecipeInfo {
 }
 
 async function getRecipeInfo(page: Page, url: string, glutenKeywords: string[]): Promise<RecipeInfo> {
-  await page.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+  await gotoWithRetry(page, url);
+  await page.waitForSelector('a[href*="/products/"], tr', { timeout: 15000 }).catch(() => {});
 
   return page.evaluate((args: { glutenKeywords: string[] }): RecipeInfo => {
     const unavailable: string[] = [];
