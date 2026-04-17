@@ -86,14 +86,31 @@ export function restartScheduler(): void {
 }
 
 export async function triggerWeeklyJobManually(): Promise<void> {
-  console.log('Manuell kjøring av ukentlig jobb...');
+  console.log('[weekly] Manuell kjøring starter...');
   await sendToDiscord('Manuell kjøring: henter oppskrifter, planlegger og bestiller...');
 
-  const { added, skipped } = await seedRecipesNonDestructive({ wanted: 20 });
-  if (added > 0) {
-    await sendToDiscord(`${added} nye oppskrifter lagt til (${skipped} hoppet over). Starter planlegging...`);
-  }
+  try {
+    console.log('[weekly] Starter seed (wanted: 20)...');
+    const start = Date.now();
+    const { added, skipped } = await seedRecipesNonDestructive({ wanted: 20 });
+    console.log(`[weekly] Seed ferdig på ${((Date.now() - start) / 1000).toFixed(1)}s — ${added} lagt til, ${skipped} hoppet over`);
 
-  const summary = await runFridayAgent();
-  await sendToDiscord(summary);
+    if (added > 0) {
+      await sendToDiscord(`${added} nye oppskrifter lagt til (${skipped} hoppet over). Starter planlegging...`);
+    } else {
+      await sendToDiscord(`Ingen nye oppskrifter (${skipped} hoppet over). Starter planlegging...`);
+    }
+
+    console.log('[weekly] Starter runFridayAgent...');
+    const agentStart = Date.now();
+    const summary = await runFridayAgent();
+    console.log(`[weekly] Agent ferdig på ${((Date.now() - agentStart) / 1000).toFixed(1)}s`);
+
+    await sendToDiscord(summary);
+    console.log('[weekly] Manuell kjøring fullført.');
+  } catch (err) {
+    const msg = `Feil under manuell kjøring: ${String(err)}`;
+    console.error(`[weekly] ${msg}`);
+    await sendToDiscord(`⚠️ ${msg}`);
+  }
 }

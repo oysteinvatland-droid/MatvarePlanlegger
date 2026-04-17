@@ -52,7 +52,10 @@ export async function runAgent(
 
   const toolsUsed: string[] = [];
 
+  let iteration = 0;
   while (true) {
+    iteration++;
+    console.log(`[agent] Iterasjon ${iteration} — sender ${messages.length} meldinger til Claude...`);
     const response = await client.messages.create({
       model: 'claude-opus-4-6',
       max_tokens: 8096,
@@ -69,6 +72,8 @@ export async function runAgent(
 
     // Legg til assistentens svar i historikken
     messages.push({ role: 'assistant', content: response.content });
+
+    console.log(`[agent] Svar mottatt — stop_reason=${response.stop_reason}, ${response.content.length} blokker`);
 
     if (response.stop_reason === 'end_turn') {
       // Finn tekstsvaret
@@ -90,7 +95,9 @@ export async function runAgent(
 
       for (const toolCall of toolUseBlocks) {
         toolsUsed.push(toolCall.name);
+        console.log(`[agent] Kjører verktøy: ${toolCall.name}`, JSON.stringify(toolCall.input).slice(0, 200));
         let resultContent: string;
+        const toolStart = Date.now();
 
         try {
           const result = await runTool(
@@ -101,6 +108,7 @@ export async function runAgent(
         } catch (err) {
           resultContent = `Feil ved kjøring av verktøy: ${String(err)}`;
         }
+        console.log(`[agent] ${toolCall.name} ferdig på ${((Date.now() - toolStart) / 1000).toFixed(1)}s — ${resultContent.length} tegn resultat`);
 
         toolResults.push({
           type: 'tool_result',
