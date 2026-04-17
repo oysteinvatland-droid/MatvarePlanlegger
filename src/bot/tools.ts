@@ -6,7 +6,7 @@ import { getAllRecipes } from '../db/recipes.js';
 import { getHistoryWithNames } from '../db/history.js';
 import { getWeeklyPlan, setDayPlan, getMondayOfWeek, clearWeekPlan } from '../planner/week.js';
 import { getConfig, setConfig, getGlutenKeywords, upsertPreference } from '../db/preferences.js';
-import { getScheduleConfig, setScheduleTime, setScheduleDay } from './scheduler.js';
+import { getScheduleConfig, setScheduleTime, setScheduleDay, triggerWeeklyJobManually } from './scheduler.js';
 import { suggestMeals } from '../planner/engine.js';
 import { getBrowserContext, closeBrowser } from '../oda/client.js';
 import { ensureLoggedIn, saveSession } from '../oda/auth.js';
@@ -168,6 +168,15 @@ export const toolDefinitions: Anthropic.Tool[] = [
         day: { type: 'string', enum: ['mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag', 'søndag'], description: 'Ukedag for kjøring' },
         time: { type: 'string', description: 'Klokkeslett i HH:MM-format, f.eks. "09:00"' },
       },
+      required: [],
+    },
+  },
+  {
+    name: 'trigger_weekly_job',
+    description: 'Kjør den ukentlige jobben manuelt nå (seed + planlegging + bestilling). Bruk når brukeren vil teste eller trigge jobben uten å vente på neste planlagte kjøring.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {},
       required: [],
     },
   },
@@ -389,6 +398,13 @@ export async function runTool(
         ok: true,
         message: `Ukentlig jobb kjører nå ${dayNames[updated.day] ?? updated.day} kl. ${updated.time} (norsk tid).`,
       };
+    }
+
+    case 'trigger_weekly_job': {
+      triggerWeeklyJobManually().catch(err => {
+        console.error('Feil under manuell ukentlig jobb:', err);
+      });
+      return { ok: true, message: 'Ukentlig jobb startet. Resultater sendes til Discord-kanalen.' };
     }
 
     case 'delete_recipe': {
