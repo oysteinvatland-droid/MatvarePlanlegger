@@ -50,7 +50,7 @@ async function gotoWithRetry(
 export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise<SeedResult> {
   const wanted = opts.wanted ?? 10;
   const maxPrice = opts.maxPrice ?? null;
-  const log = opts.onProgress ?? (() => {});
+  const log = opts.onProgress ?? ((msg: string) => console.log(`[seed] ${msg}`));
 
   const glutenKeywords = getGlutenKeywords();
   const db = getDb();
@@ -104,6 +104,7 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
           break;
         }
         totalScanned++;
+        log(`[${totalScanned}] Sjekker: ${candidate.name}…`);
 
         await recipePage.waitForTimeout(1000 + Math.random() * 1000);
         const info = await getRecipeInfo(recipePage, candidate.url, glutenKeywords);
