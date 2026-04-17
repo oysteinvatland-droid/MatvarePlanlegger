@@ -42,7 +42,7 @@ export async function addRecipeToCart(
       tr => tr.querySelector('[class*="ingredient-quantity"]')
     );
     for (const tr of rows) {
-      if (/utsolgt|ikke tilgjengelig|midlertidig utilgjengelig/i.test(tr.textContent ?? '')) {
+      if (/utsolgt|utilgj|ikke tilgjengelig|midlertidig utilgjengelig/i.test(tr.textContent ?? '')) {
         const cells = tr.querySelectorAll('td');
         results.push(cells[1]?.textContent?.trim() ?? tr.textContent?.trim().slice(0, 50) ?? 'ukjent');
       }
@@ -64,7 +64,7 @@ export async function addRecipeToCart(
         if (!container.parentElement) break;
         container = container.parentElement;
       }
-      if (/utsolgt/i.test(container.textContent ?? '')) {
+      if (/utsolgt|utilgj/i.test(container.textContent ?? '')) {
         const name = link.textContent?.trim();
         if (name && name.length > 1) results.push(name);
       }

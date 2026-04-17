@@ -170,7 +170,7 @@ async function getRecipeInfo(page: Page, url: string, glutenKeywords: string[]):
     );
     for (const tr of rows) {
       const text = tr.textContent ?? '';
-      if (/utsolgt|ikke tilgjengelig|midlertidig utilgjengelig/i.test(text)) {
+      if (/utsolgt|utilgj|ikke tilgjengelig|midlertidig utilgjengelig/i.test(text)) {
         const cells = tr.querySelectorAll('td');
         unavailable.push(cells[1]?.textContent?.trim() ?? text.trim().slice(0, 50) ?? 'ukjent');
       }
@@ -200,7 +200,7 @@ async function getRecipeInfo(page: Page, url: string, glutenKeywords: string[]):
           if (!container.parentElement) break;
           container = container.parentElement;
         }
-        if (/utsolgt/i.test(container.textContent ?? '')) {
+        if (/utsolgt|utilgj/i.test(container.textContent ?? '')) {
           const name = link.textContent?.trim();
           if (name && name.length > 1) unavailable.push(name);
         }
