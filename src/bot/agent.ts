@@ -22,6 +22,11 @@ Boten henter automatisk 20 nye oppskrifter fra Oda før planlegging starter.
 - Antall dager, husholdningsstørrelse → oppdater config via set_config
 - Bekreft alltid at endringen er lagret i svaret ditt
 
+## Viktig: Synkroniser preferanser til config
+Scheduleren kan bare lese strukturert config, ikke fritekst. Når preferences.md nevner noe som påvirker automatisk seed, MÅ du også sette tilsvarende config-nøkkel:
+- Makspris per oppskrift → set_config key='max_recipe_price' value='<tall>'
+- Antall oppskrifter å hente → set_config key='seed_wanted' value='<tall>'
+
 ## Når brukeren ber om å se innstillinger
 Kall read_preferences, get_config og get_schedule, og presenter alt på en oversiktlig måte.
 get_config returnerer også glutenKeywords – listen over ingredienser som gjør at oppskrifter hoppes over ved import.

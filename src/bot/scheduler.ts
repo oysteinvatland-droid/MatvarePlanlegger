@@ -4,6 +4,7 @@ import { sendToDiscord } from './discord.js';
 import { seedRecipesNonDestructive } from '../commands/seed.js';
 import { getDb } from '../db/client.js';
 import { setConfig } from '../db/preferences.js';
+import type { SeedOptions } from '../commands/seed.js';
 
 let weeklyTask: ScheduledTask | null = null;
 
@@ -25,6 +26,15 @@ export function getScheduleConfig(): ScheduleConfig {
     time: map['schedule_time'] ?? DEFAULT_SCHEDULE_TIME,
     day: map['schedule_day'] ?? DEFAULT_SCHEDULE_DAY,
   };
+}
+
+function getSeedOptions(): SeedOptions {
+  const db = getDb();
+  const rows = db.prepare("SELECT key, value FROM config WHERE key IN ('seed_wanted', 'max_recipe_price')").all() as { key: string; value: string }[];
+  const map = Object.fromEntries(rows.map(r => [r.key, r.value]));
+  const wanted = parseInt(map['seed_wanted'] ?? '20', 10);
+  const maxPrice = map['max_recipe_price'] ? parseFloat(map['max_recipe_price']) : undefined;
+  return { wanted, maxPrice };
 }
 
 const DAY_NAMES: Record<string, string> = {
@@ -63,7 +73,9 @@ export function restartScheduler(): void {
     try {
       await sendToDiscord('Starter ukentlig oppdatering: henter nye oppskrifter, planlegger og bestiller...');
 
-      const { added, skipped } = await seedRecipesNonDestructive({ wanted: 20 });
+      const seedOpts = getSeedOptions();
+      console.log(`[weekly] Seed-config: wanted=${seedOpts.wanted}, maxPrice=${seedOpts.maxPrice ?? 'ingen'}`);
+      const { added, skipped } = await seedRecipesNonDestructive(seedOpts);
       if (added > 0) {
         await sendToDiscord(`${added} nye oppskrifter lagt til (${skipped} hoppet over). Starter planlegging...`);
       } else {
@@ -90,9 +102,10 @@ export async function triggerWeeklyJobManually(): Promise<void> {
   await sendToDiscord('Manuell kjøring: henter oppskrifter, planlegger og bestiller...');
 
   try {
-    console.log('[weekly] Starter seed (wanted: 20)...');
+    const seedOpts = getSeedOptions();
+    console.log(`[weekly] Starter seed — wanted=${seedOpts.wanted}, maxPrice=${seedOpts.maxPrice ?? 'ingen'}...`);
     const start = Date.now();
-    const { added, skipped } = await seedRecipesNonDestructive({ wanted: 20 });
+    const { added, skipped } = await seedRecipesNonDestructive(seedOpts);
     console.log(`[weekly] Seed ferdig på ${((Date.now() - start) / 1000).toFixed(1)}s — ${added} lagt til, ${skipped} hoppet over`);
 
     if (added > 0) {
