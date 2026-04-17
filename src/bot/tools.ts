@@ -6,7 +6,7 @@ import { getAllRecipes } from '../db/recipes.js';
 import { getHistoryWithNames } from '../db/history.js';
 import { getWeeklyPlan, setDayPlan, getMondayOfWeek, clearWeekPlan } from '../planner/week.js';
 import { getConfig, setConfig, getGlutenKeywords, upsertPreference } from '../db/preferences.js';
-import { getScheduleTimes, setScheduleTime } from './scheduler.js';
+import { getScheduleConfig, setScheduleTime, setScheduleDay } from './scheduler.js';
 import { suggestMeals } from '../planner/engine.js';
 import { getBrowserContext, closeBrowser } from '../oda/client.js';
 import { ensureLoggedIn, saveSession } from '../oda/auth.js';
@@ -152,7 +152,7 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'get_schedule',
-    description: 'Vis når boten er satt opp til å kjøre automatisk (fredag-planlegging og tirsdag-oppdatering).',
+    description: 'Vis når den ukentlige jobben kjører (seed + planlegging + bestilling).',
     input_schema: {
       type: 'object' as const,
       properties: {},
@@ -161,14 +161,14 @@ export const toolDefinitions: Anthropic.Tool[] = [
   },
   {
     name: 'set_schedule',
-    description: 'Endre tidspunkt for automatisk kjøring. job = "fredag" (planlegging+bestilling) eller "tirsdag" (oppdater oppskrifter). time = klokkeslett i HH:MM-format.',
+    description: 'Endre dag og/eller tidspunkt for den ukentlige jobben. day = ukedag (mandag–søndag). time = klokkeslett i HH:MM-format.',
     input_schema: {
       type: 'object' as const,
       properties: {
-        job: { type: 'string', enum: ['fredag', 'tirsdag'], description: '"fredag" eller "tirsdag"' },
+        day: { type: 'string', enum: ['mandag', 'tirsdag', 'onsdag', 'torsdag', 'fredag', 'lørdag', 'søndag'], description: 'Ukedag for kjøring' },
         time: { type: 'string', description: 'Klokkeslett i HH:MM-format, f.eks. "09:00"' },
       },
-      required: ['job', 'time'],
+      required: [],
     },
   },
   {
@@ -336,25 +336,59 @@ export async function runTool(
     }
 
     case 'get_schedule': {
-      const times = getScheduleTimes();
+      const config = getScheduleConfig();
+      const dayNames: Record<string, string> = {
+        '0': 'søndag', '1': 'mandag', '2': 'tirsdag', '3': 'onsdag',
+        '4': 'torsdag', '5': 'fredag', '6': 'lørdag',
+      };
+      const dayName = dayNames[config.day] ?? config.day;
       return {
-        fredag: `Planlegging og bestilling kjører kl. ${times.friday} (norsk tid)`,
-        tirsdag: `Oppdatering av oppskrifter kjører kl. ${times.tuesday} (norsk tid)`,
+        beskrivelse: `Ukentlig jobb (seed 20 oppskrifter + planlegging + bestilling) kjører ${dayName} kl. ${config.time} (norsk tid)`,
+        dag: dayName,
+        tid: config.time,
       };
     }
 
     case 'set_schedule': {
-      const job = String(input['job'] ?? '') as 'fredag' | 'tirsdag';
-      const time = String(input['time'] ?? '');
-      if (!/^\d{2}:\d{2}$/.test(time)) {
-        return { ok: false, error: 'Ugyldig tidsformat. Bruk HH:MM, f.eks. "09:00".' };
+      const dayMap: Record<string, string> = {
+        'mandag': '1', 'tirsdag': '2', 'onsdag': '3', 'torsdag': '4',
+        'fredag': '5', 'lørdag': '6', 'søndag': '0',
+      };
+      const dayInput = input['day'] ? String(input['day']).toLowerCase() : null;
+      const timeInput = input['time'] ? String(input['time']) : null;
+
+      if (!dayInput && !timeInput) {
+        return { ok: false, error: 'Oppgi dag og/eller tidspunkt.' };
       }
-      const [h, m] = time.split(':').map(Number);
-      if (h < 0 || h > 23 || m < 0 || m > 59) {
-        return { ok: false, error: 'Ugyldig klokkeslett.' };
+
+      if (timeInput) {
+        if (!/^\d{2}:\d{2}$/.test(timeInput)) {
+          return { ok: false, error: 'Ugyldig tidsformat. Bruk HH:MM, f.eks. "09:00".' };
+        }
+        const [h, m] = timeInput.split(':').map(Number);
+        if (h < 0 || h > 23 || m < 0 || m > 59) {
+          return { ok: false, error: 'Ugyldig klokkeslett.' };
+        }
+        setScheduleTime(timeInput);
       }
-      setScheduleTime(job, time);
-      return { ok: true, job, time, message: `${job}-kjøring er nå satt til kl. ${time} (norsk tid).` };
+
+      if (dayInput) {
+        const dayNum = dayMap[dayInput];
+        if (!dayNum) {
+          return { ok: false, error: `Ugyldig dag: ${dayInput}. Bruk mandag–søndag.` };
+        }
+        setScheduleDay(dayNum);
+      }
+
+      const updated = getScheduleConfig();
+      const dayNames: Record<string, string> = {
+        '0': 'søndag', '1': 'mandag', '2': 'tirsdag', '3': 'onsdag',
+        '4': 'torsdag', '5': 'fredag', '6': 'lørdag',
+      };
+      return {
+        ok: true,
+        message: `Ukentlig jobb kjører nå ${dayNames[updated.day] ?? updated.day} kl. ${updated.time} (norsk tid).`,
+      };
     }
 
     case 'delete_recipe': {

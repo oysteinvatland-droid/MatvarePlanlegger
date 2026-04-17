@@ -4,8 +4,8 @@ import { chromium, type Page } from 'playwright';
 import { getDb } from '../db/client.js';
 import { getGlutenKeywords } from '../db/preferences.js';
 
-const RECIPES_URL = 'https://oda.com/no/recipes/';
-const MAX_SCAN = 200; // sikkerhetsstopp
+const RECIPES_BASE = 'https://oda.com/no/recipes/all/?filters=meal%3A65';
+const MAX_SCAN = 200;
 
 export interface SeedOptions {
   wanted?: number;
@@ -16,6 +16,9 @@ export interface SeedOptions {
 export interface SeedResult {
   added: number;
   skipped: number;
+  duplicates: number;
+  totalScanned: number;
+  stopReason: 'done' | 'no-more-recipes' | 'max-scan-reached';
 }
 
 /**
@@ -38,35 +41,45 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
   const recipePage = await browser.newPage();
 
   try {
-    await listPage.goto(RECIPES_URL, { waitUntil: 'networkidle', timeout: 30000 });
-    const cookieBtn = listPage.getByRole('button', { name: /godkjenn alle/i });
-    if (await cookieBtn.count() > 0) await cookieBtn.click();
-
     let added = 0;
     let skipped = 0;
+    let duplicates = 0;
     let totalScanned = 0;
-    const seenUrls = new Set<string>();
+    let page = 1;
+    let stopReason: SeedResult['stopReason'] = 'done';
+    let cookieHandled = false;
 
     while (added < wanted && totalScanned < MAX_SCAN) {
-      const allCards = await listPage.evaluate(() => {
-        const cards = document.querySelectorAll('[data-testid^="recipe-tile"]');
-        return Array.from(cards).map(card => ({
+      const url = `${RECIPES_BASE}&page=${page}`;
+      log(`Side ${page}… (${added}/${wanted} lagt til så langt)`);
+      await listPage.goto(url, { waitUntil: 'networkidle', timeout: 30000 });
+
+      if (!cookieHandled) {
+        const cookieBtn = listPage.getByRole('button', { name: /godkjenn alle/i });
+        if (await cookieBtn.count() > 0) await cookieBtn.click();
+        cookieHandled = true;
+      }
+
+      const cards = await listPage.evaluate(() => {
+        const tiles = document.querySelectorAll('[data-testid^="recipe-tile"]');
+        return Array.from(tiles).map(card => ({
           name: card.getAttribute('aria-label')?.replace(/ - \d+.*$/, '').trim() ?? '',
           url: 'https://oda.com' + (card.querySelector('a')?.getAttribute('href') ?? ''),
         })).filter(r => r.name && r.url);
       });
 
-      const newCards = allCards.filter(c => !seenUrls.has(c.url));
-
-      if (newCards.length === 0) {
-        const loaded = await scrollForMore(listPage, allCards.length);
-        if (!loaded) break;
-        continue;
+      if (cards.length === 0) {
+        stopReason = 'no-more-recipes';
+        log(`Ingen oppskrifter på side ${page} – Oda har ikke flere`);
+        break;
       }
 
-      for (const candidate of newCards) {
-        if (added >= wanted || totalScanned >= MAX_SCAN) break;
-        seenUrls.add(candidate.url);
+      for (const candidate of cards) {
+        if (added >= wanted) break;
+        if (totalScanned >= MAX_SCAN) {
+          stopReason = 'max-scan-reached';
+          break;
+        }
         totalScanned++;
 
         const info = await getRecipeInfo(recipePage, candidate.url, glutenKeywords);
@@ -86,54 +99,29 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
           log(`For dyr: ${candidate.name} (${info.price} kr)`);
           continue;
         }
-        if (info.tags.length > 0 && !info.tags.some(t => /middag/i.test(t))) {
-          skipped++;
-          log(`Ikke middag: ${candidate.name}`);
-          continue;
-        }
 
         const result = insert.run(candidate.name, candidate.url, JSON.stringify(info.tags), info.price);
         if (result.changes > 0) {
           added++;
           log(`Lagt til: ${candidate.name}${info.price !== null ? ` (${info.price} kr)` : ''}`);
         } else {
+          duplicates++;
           log(`Allerede i databasen: ${candidate.name}`);
         }
       }
+
+      page++;
     }
 
-    return { added, skipped };
+    if (added >= wanted) stopReason = 'done';
+    else if (totalScanned >= MAX_SCAN) stopReason = 'max-scan-reached';
+
+    return { added, skipped, duplicates, totalScanned, stopReason };
   } finally {
     await browser.close();
   }
 }
 
-/**
- * Scroller til siste oppskriftskort og venter på at nye lastes inn.
- * Returnerer true hvis nye kort dukket opp, false hvis siden er tom.
- */
-async function scrollForMore(page: Page, currentCount: number): Promise<boolean> {
-  // Scroll til siste synlige kort for å trigge lazy-loading
-  await page.evaluate((selector: string) => {
-    const cards = document.querySelectorAll(selector);
-    const last = cards[cards.length - 1];
-    if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    else window.scrollTo(0, document.body.scrollHeight);
-  }, '[data-testid^="recipe-tile"]');
-
-  // Vent på at nettverksaktivitet roer seg
-  try {
-    await page.waitForLoadState('networkidle', { timeout: 5000 });
-  } catch {
-    await page.waitForTimeout(3000);
-  }
-
-  const after = await page.evaluate((selector: string) =>
-    document.querySelectorAll(selector).length
-  , '[data-testid^="recipe-tile"]');
-
-  return after > currentCount;
-}
 
 interface RecipeInfo {
   unavailable: string[];
@@ -224,94 +212,41 @@ const seedCommand = new Command('seed')
   .option('--max-pris <kr>', 'Hopp over oppskrifter dyrere enn dette (kr)')
   .action(async (opts: { antall: string; maxPris?: string }) => {
     const wanted = parseInt(opts.antall, 10);
-    const maxPrice = opts.maxPris ? parseFloat(opts.maxPris) : null;
-    const glutenKeywords = getGlutenKeywords();
+    const maxPrice = opts.maxPris ? parseFloat(opts.maxPris) : undefined;
     console.log('\n  ' + chalk.dim(`Henter ${wanted} oppskrifter fra oda.no (fortsetter til målet er nådd)...`));
 
-    const browser = await chromium.launch({ headless: true });
-    const listPage = await browser.newPage();
-    const recipePage = await browser.newPage();
-
-    try {
-      await listPage.goto(RECIPES_URL, { waitUntil: 'networkidle', timeout: 30000 });
-      const cookieBtn = listPage.getByRole('button', { name: /godkjenn alle/i });
-      if (await cookieBtn.count() > 0) await cookieBtn.click();
-
-      // Slett eksisterende data
-      const db = getDb();
-      db.exec('DELETE FROM meal_history');
-      db.exec('DELETE FROM weekly_plans');
-      db.exec('DELETE FROM preferences');
-      db.exec('DELETE FROM ingredients');
-      db.exec('DELETE FROM recipes');
-
-      const insert = db.prepare(
-        `INSERT INTO recipes (name, oda_url, tags, price) VALUES (?, ?, ?, ?)`
-      );
-
-      let added = 0;
-      let skipped = 0;
-      let totalScanned = 0;
-      const seenUrls = new Set<string>();
-
-      while (added < wanted && totalScanned < MAX_SCAN) {
-        const allCards = await listPage.evaluate(() => {
-          const cards = document.querySelectorAll('[data-testid^="recipe-tile"]');
-          return Array.from(cards).map(card => ({
-            name: card.getAttribute('aria-label')?.replace(/ - \d+.*$/, '').trim() ?? '',
-            url: 'https://oda.com' + (card.querySelector('a')?.getAttribute('href') ?? ''),
-          })).filter(r => r.name && r.url);
-        });
-
-        const newCards = allCards.filter(c => !seenUrls.has(c.url));
-
-        if (newCards.length === 0) {
-          const loaded = await scrollForMore(listPage, allCards.length);
-          if (!loaded) break;
-          continue;
+    const result = await seedRecipesNonDestructive({
+      wanted,
+      maxPrice,
+      onProgress: (msg) => {
+        if (msg.startsWith('Lagt til:')) {
+          console.log(chalk.green(`  ✓ ${msg.replace('Lagt til: ', '')}`));
+        } else if (msg.startsWith('Allerede i databasen:')) {
+          console.log(chalk.dim(`  – ${msg}`));
+        } else if (msg.startsWith('Side ')) {
+          console.log(chalk.dim(`  ↓ ${msg}`));
+        } else if (msg.startsWith('Ingen ')) {
+          console.log(chalk.red(`  ✗ ${msg}`));
+        } else {
+          console.log(chalk.yellow(`  ⚠ ${msg}`));
         }
+      },
+    });
 
-        for (const candidate of newCards) {
-          if (added >= wanted || totalScanned >= MAX_SCAN) break;
-          seenUrls.add(candidate.url);
-          totalScanned++;
+    const parts = [
+      `${result.added} nye lagret`,
+      result.duplicates > 0 ? `${result.duplicates} allerede i db` : null,
+      result.skipped > 0 ? `${result.skipped} hoppet over` : null,
+      `${result.totalScanned} skannet`,
+    ].filter(Boolean).join(', ');
 
-          process.stdout.write(chalk.dim(`  Sjekker: ${candidate.name}...`));
-          const info = await getRecipeInfo(recipePage, candidate.url, glutenKeywords);
-
-          if (info.unavailable.length > 0) {
-            process.stdout.write('\r' + chalk.yellow(`  ⚠ Utsolgt: ${candidate.name}`) + ' '.repeat(10) + '\n');
-            skipped++;
-            continue;
-          }
-          if (info.glutenIngredients.length > 0) {
-            process.stdout.write('\r' + chalk.yellow(`  ⚠ Gluten: ${candidate.name} (${info.glutenIngredients.join(', ')})`) + ' '.repeat(10) + '\n');
-            skipped++;
-            continue;
-          }
-          if (maxPrice !== null && info.price !== null && info.price > maxPrice) {
-            process.stdout.write('\r' + chalk.yellow(`  ⚠ For dyr: ${candidate.name} (${info.price} kr)`) + ' '.repeat(10) + '\n');
-            skipped++;
-            continue;
-          }
-          if (info.tags.length > 0 && !info.tags.some(t => /middag/i.test(t))) {
-            process.stdout.write('\r' + chalk.yellow(`  ⚠ Ikke middag: ${candidate.name}`) + ' '.repeat(10) + '\n');
-            skipped++;
-            continue;
-          }
-
-          const priceLabel = info.price !== null ? ` – ${info.price} kr` : '';
-          const tagsLabel = info.tags.length > 0 ? ` [${info.tags.join(', ')}]` : '';
-          process.stdout.write('\r' + chalk.green(`  ✓ ${candidate.name}${priceLabel}${tagsLabel}`) + ' '.repeat(10) + '\n');
-          insert.run(candidate.name, candidate.url, JSON.stringify(info.tags), info.price);
-          added++;
-        }
-      }
-
-      console.log(chalk.dim(`\n  ${added} oppskrifter lagret, ${skipped} hoppet over (skannet ${totalScanned} totalt)\n`));
-    } finally {
-      await browser.close();
+    console.log(chalk.dim(`\n  ${parts}`));
+    if (result.stopReason === 'no-more-recipes') {
+      console.log(chalk.yellow(`  Oda hadde ikke flere oppskrifter å laste.`));
+    } else if (result.stopReason === 'max-scan-reached') {
+      console.log(chalk.yellow(`  Sikkerhetsgrense nådd (${MAX_SCAN} skannet).`));
     }
+    console.log();
   });
 
 export default seedCommand;

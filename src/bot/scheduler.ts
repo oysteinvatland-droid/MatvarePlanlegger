@@ -5,36 +5,44 @@ import { seedRecipesNonDestructive } from '../commands/seed.js';
 import { getDb } from '../db/client.js';
 import { setConfig } from '../db/preferences.js';
 
-let fridayTask: ScheduledTask | null = null;
-let tuesdayTask: ScheduledTask | null = null;
+let weeklyTask: ScheduledTask | null = null;
 
-const DEFAULT_FRIDAY_TIME = '08:00';
-const DEFAULT_TUESDAY_TIME = '07:00';
+const DEFAULT_SCHEDULE_TIME = '08:00';
+const DEFAULT_SCHEDULE_DAY = '5'; // fredag
 
-export interface ScheduleTimes {
-  friday: string;   // HH:MM
-  tuesday: string;  // HH:MM
+export interface ScheduleConfig {
+  time: string;  // HH:MM
+  day: string;   // 0–6 (søndag–lørdag)
 }
 
-export function getScheduleTimes(): ScheduleTimes {
+export function getScheduleConfig(): ScheduleConfig {
   const db = getDb();
   const rows = db
-    .prepare("SELECT key, value FROM config WHERE key IN ('schedule_friday_time', 'schedule_tuesday_time')")
+    .prepare("SELECT key, value FROM config WHERE key IN ('schedule_time', 'schedule_day')")
     .all() as { key: string; value: string }[];
   const map = Object.fromEntries(rows.map(r => [r.key, r.value]));
   return {
-    friday: map['schedule_friday_time'] ?? DEFAULT_FRIDAY_TIME,
-    tuesday: map['schedule_tuesday_time'] ?? DEFAULT_TUESDAY_TIME,
+    time: map['schedule_time'] ?? DEFAULT_SCHEDULE_TIME,
+    day: map['schedule_day'] ?? DEFAULT_SCHEDULE_DAY,
   };
 }
 
-export function setScheduleTime(job: 'fredag' | 'tirsdag', time: string): void {
-  const key = job === 'fredag' ? 'schedule_friday_time' : 'schedule_tuesday_time';
-  setConfig(key, time);
+const DAY_NAMES: Record<string, string> = {
+  '0': 'søndag', '1': 'mandag', '2': 'tirsdag', '3': 'onsdag',
+  '4': 'torsdag', '5': 'fredag', '6': 'lørdag',
+};
+
+export function setScheduleTime(time: string): void {
+  setConfig('schedule_time', time);
   restartScheduler();
 }
 
-function timeToCron(time: string, dayOfWeek: number): string {
+export function setScheduleDay(day: string): void {
+  setConfig('schedule_day', day);
+  restartScheduler();
+}
+
+function timeToCron(time: string, dayOfWeek: string): string {
   const [hourStr, minuteStr] = time.split(':');
   const hour = parseInt(hourStr ?? '8', 10);
   const minute = parseInt(minuteStr ?? '0', 10);
@@ -46,49 +54,46 @@ export function startScheduler(): void {
 }
 
 export function restartScheduler(): void {
-  fridayTask?.stop();
-  tuesdayTask?.stop();
+  weeklyTask?.stop();
 
-  const times = getScheduleTimes();
+  const config = getScheduleConfig();
 
-  fridayTask = cron.schedule(timeToCron(times.friday, 5), async () => {
-    console.log('Fredag-agent starter...');
+  weeklyTask = cron.schedule(timeToCron(config.time, config.day), async () => {
+    console.log('Ukentlig jobb starter: seed + planlegging + bestilling...');
     try {
-      await sendToDiscord('Starter ukentlig planlegging og bestilling...');
+      await sendToDiscord('Starter ukentlig oppdatering: henter nye oppskrifter, planlegger og bestiller...');
+
+      const { added, skipped } = await seedRecipesNonDestructive({ wanted: 20 });
+      if (added > 0) {
+        await sendToDiscord(`${added} nye oppskrifter lagt til (${skipped} hoppet over). Starter planlegging...`);
+      } else {
+        await sendToDiscord(`Ingen nye oppskrifter funnet (${skipped} hoppet over). Starter planlegging...`);
+      }
+
       const summary = await runFridayAgent();
       await sendToDiscord(summary);
     } catch (err) {
-      const msg = `Feil under fredag-planlegging: ${String(err)}`;
+      const msg = `Feil under ukentlig jobb: ${String(err)}`;
       console.error(msg);
       await sendToDiscord(`⚠️ ${msg}`);
     }
   }, { timezone: 'Europe/Oslo' });
 
-  tuesdayTask = cron.schedule(timeToCron(times.tuesday, 2), async () => {
-    console.log('Tirsdag-seed starter...');
-    try {
-      const { added, skipped } = await seedRecipesNonDestructive({ wanted: 10 });
-      if (added > 0) {
-        await sendToDiscord(`Oppskriftsliste oppdatert: ${added} nye oppskrifter lagt til (${skipped} hoppet over).`);
-      }
-    } catch (err) {
-      console.error('Feil ved automatisk seed:', err);
-    }
-  }, { timezone: 'Europe/Oslo' });
+  weeklyTask.start();
 
-  fridayTask.start();
-  tuesdayTask.start();
-
-  console.log(`Fredag-scheduler startet (kl. ${times.friday} norsk tid).`);
-  console.log(`Tirsdag-seed startet (kl. ${times.tuesday} norsk tid).`);
+  const dayName = DAY_NAMES[config.day] ?? config.day;
+  console.log(`Ukentlig jobb startet: ${dayName} kl. ${config.time} (norsk tid).`);
 }
 
-/**
- * Kjør fredag-agenten manuelt (for testing).
- */
-export async function triggerFridayAgentManually(): Promise<void> {
-  console.log('Manuell kjøring av fredag-agent...');
-  await sendToDiscord('Manuell kjøring av planlegging og bestilling...');
+export async function triggerWeeklyJobManually(): Promise<void> {
+  console.log('Manuell kjøring av ukentlig jobb...');
+  await sendToDiscord('Manuell kjøring: henter oppskrifter, planlegger og bestiller...');
+
+  const { added, skipped } = await seedRecipesNonDestructive({ wanted: 20 });
+  if (added > 0) {
+    await sendToDiscord(`${added} nye oppskrifter lagt til (${skipped} hoppet over). Starter planlegging...`);
+  }
+
   const summary = await runFridayAgent();
   await sendToDiscord(summary);
 }

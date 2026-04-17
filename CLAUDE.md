@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Testing
+
+Ingen tester eksisterer i prosjektet per nå. `npm run test` (`node --test`) vil ikke finne noen filer.
+
 ## Commands
 
 ```bash
@@ -74,11 +78,11 @@ Boten holder samtalehistorikk per Discord-bruker i minnet (ikke persistert). Age
 
 To parallelle mekanismer for preferanser:
 - **`preferences.md`** (`/data/preferences.md`) – fritekstfil agenten leser og skriver. Brukes av Claude-agenten til å tolke og huske brukerønsker.
-- **`config`-tabell i SQLite** – strukturert konfigurasjon: `household_size`, `plan_days`, `dietary` (JSON-array). Brukes av forslagsalgoritmen.
+- **`config`-tabell i SQLite** – strukturert konfigurasjon: `household_size`, `plan_days`, `dietary` (JSON-array), `gluten_keywords` (JSON-array, standard: hvetemel/panert/soyasaus m.fl.), `schedule_friday_time` og `schedule_tuesday_time` (HH:MM, styrer cron-tidspunkter). Brukes av forslagsalgoritmen og scheduleren.
 
 ### Oppskrifter og Oda.no
 
-Oppskrifter lagres kun med `name` og `oda_url` (ingen ingredienser lokalt). `seed`-kommandoen scraper `oda.com/no/recipes/` med Playwright, besøker hver oppskriftsside og hopper over de med utsolgte ingredienser. Skanner inntil `--skann` (standard 30) kandidater til `--antall` (standard 10) godkjente er funnet.
+Oppskrifter lagres med `name`, `oda_url` og `price` (kr, kan være null – satt av `seed` via migration 004). Ingen ingredienser lagres lokalt. `seed`-kommandoen scraper `oda.com/no/recipes/` med Playwright, besøker hver oppskriftsside og hopper over de med utsolgte ingredienser. Skanner inntil `--skann` (standard 30) kandidater til `--antall` (standard 10) godkjente er funnet.
 
 `bestill`-kommandoen:
 1. Logger inn på `oda.com/no/user/login/` (session gjenbrukes fra `~/.matvareplanlegger/oda-session.json`)
