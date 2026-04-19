@@ -138,11 +138,11 @@ export async function runAgent(
  * Returnerer oppsummeringstekst som kan sendes til Discord.
  */
 export async function runFridayAgent(): Promise<string> {
-  const prompt = `Det er fredag og tid for ukens planlegging.
+  const prompt = `Det er tid for ukens planlegging.
 
-1. Les preferences.md
+1. Les preferences.md og hent config (get_config) — merk plan_days for antall dager å planlegge
 2. Sjekk hva som er laget de siste 2 ukene
-3. Velg 5 passende middager for neste uke
+3. Velg middager for neste uke — én for HVER av de plan_days dagene (mandag og utover)
 4. Sett planen i databasen
 5. Bestill varene på Oda.no
 6. Gi en kortfattet oppsummering av hva du valgte og hvorfor`;
