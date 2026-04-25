@@ -111,7 +111,7 @@ export async function seedRecipesNonDestructive(opts: SeedOptions = {}): Promise
 
         if (info.unavailable.length > 0) {
           skipped++;
-          log(`Utsolgt: ${candidate.name}`);
+          log(`Utsolgt: ${candidate.name} → ${info.unavailable.join(', ')}`);
           continue;
         }
         if (info.glutenIngredients.length > 0) {

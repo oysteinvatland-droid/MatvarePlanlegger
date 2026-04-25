@@ -17,6 +17,7 @@ const [
   historikkMod,
   konfigurerMod,
   seedMod,
+  titlerMod,
 ] = await Promise.all([
   import('./commands/plan.js'),
   import('./commands/suggest.js'),
@@ -25,6 +26,7 @@ const [
   import('./commands/historikk.js'),
   import('./commands/konfigurer.js'),
   import('./commands/seed.js'),
+  import('./commands/titler.js'),
 ]);
 
 program.addCommand(planMod.default);
@@ -34,5 +36,6 @@ program.addCommand(oppskriftMod.default);
 program.addCommand(historikkMod.default);
 program.addCommand(konfigurerMod.default);
 program.addCommand(seedMod.default);
+program.addCommand(titlerMod.default);
 
 program.parse();

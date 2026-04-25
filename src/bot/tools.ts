@@ -434,7 +434,11 @@ export async function runTool(
     case 'refresh_recipes': {
       const antall = typeof input['antall'] === 'number' ? input['antall'] : 10;
       const maxPrice = typeof input['max_pris'] === 'number' ? input['max_pris'] : undefined;
-      const result = await seedRecipesNonDestructive({ wanted: antall, maxPrice });
+      const result = await seedRecipesNonDestructive({
+        wanted: antall,
+        maxPrice,
+        onProgress: (msg) => console.log(`[seed] ${msg}`),
+      });
       return result;
     }
 

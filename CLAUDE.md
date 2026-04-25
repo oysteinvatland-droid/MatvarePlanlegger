@@ -20,7 +20,8 @@ npm run oda:debug           # Start Playwright med synlig nettleser (PLAYWRIGHT_
 
 ```bash
 npm run dev -- seed                        # Hent 10 oppskrifter fra oda.com/no/recipes/ (hopper over utsolgte)
-npm run dev -- seed --antall 10 --skann 40 # Skann 40 kandidater, lagre 10 godkjente
+npm run dev -- seed --antall 10            # Lagre 10 godkjente (skanner inntil 200 kandidater)
+npm run dev -- seed --max-pris 200         # Hopp over oppskrifter dyrere enn 200 kr
 npm run dev -- uke                         # Vis/fyll ukens middagsplan
 npm run dev -- uke --endre                 # Endre én allerede satt dag
 npm run dev -- uke --slett                 # Slett alle middager for uken
@@ -61,7 +62,7 @@ src/bot.ts
   → bot/discord.ts      Discord.js-klient, lytter på meldinger i én kanal (DISCORD_CHANNEL_ID)
   → bot/agent.ts        Agentic loop mot Claude API (claude-opus-4-6) med tool use
   → bot/tools.ts        Verktøydefinisjoner og -implementasjoner Claude kan kalle
-  → bot/scheduler.ts    cron-jobs: fredag kl. 08:00 planlegger+bestiller, tirsdag kl. 07:00 seeder nye oppskrifter
+  → bot/scheduler.ts    Én konfigurerbar ukentlig cron-job (standard: fredag kl. 08:00)
 ```
 
 Boten holder samtalehistorikk per Discord-bruker i minnet (ikke persistert). Agenten bruker prompt caching på system-prompten (`cache_control: ephemeral`).
@@ -78,11 +79,15 @@ Boten holder samtalehistorikk per Discord-bruker i minnet (ikke persistert). Age
 
 To parallelle mekanismer for preferanser:
 - **`preferences.md`** (`/data/preferences.md`) – fritekstfil agenten leser og skriver. Brukes av Claude-agenten til å tolke og huske brukerønsker.
-- **`config`-tabell i SQLite** – strukturert konfigurasjon: `household_size`, `plan_days`, `dietary` (JSON-array), `gluten_keywords` (JSON-array, standard: hvetemel/panert/soyasaus m.fl.), `schedule_friday_time` og `schedule_tuesday_time` (HH:MM, styrer cron-tidspunkter). Brukes av forslagsalgoritmen og scheduleren.
+- **`config`-tabell i SQLite** – strukturert konfigurasjon: `household_size`, `plan_days`, `dietary` (JSON-array), `gluten_keywords` (JSON-array, standard: hvetemel/panert/soyasaus m.fl.), `schedule_time` (HH:MM) og `schedule_day` (0–6, standard: 5=fredag). Brukes av forslagsalgoritmen og scheduleren.
 
 ### Oppskrifter og Oda.no
 
-Oppskrifter lagres med `name`, `oda_url` og `price` (kr, kan være null – satt av `seed` via migration 004). Ingen ingredienser lagres lokalt. `seed`-kommandoen scraper `oda.com/no/recipes/` med Playwright, besøker hver oppskriftsside og hopper over de med utsolgte ingredienser. Skanner inntil `--skann` (standard 30) kandidater til `--antall` (standard 10) godkjente er funnet.
+Oppskrifter lagres med `name`, `oda_url` og `price` (kr, kan være null). Ingen ingredienser lagres lokalt.
+
+**Nettleserkontekst:** `src/oda/client.ts` er singleton som setter opp Playwright med custom Chrome user-agent, norsk locale/tidssone, og gjenbruker session-cookies. Brukes av både `seed` og `bestill`.
+
+`seed`-kommandoen scraper `oda.com/no/recipes/` med Playwright, paginerer gjennom listesider og besøker hver oppskrift. Hopper over utsolgte, glutenholdige og for dyre oppskrifter. Bruker `domcontentloaded` + retry-logikk (maks 2 forsøk) med randomisert forsinkelse (1–2s) mellom besøk for å unngå Odas rate-limiting. Skanner inntil `MAX_SCAN` (200) kandidater.
 
 `bestill`-kommandoen:
 1. Logger inn på `oda.com/no/user/login/` (session gjenbrukes fra `~/.matvareplanlegger/oda-session.json`)
